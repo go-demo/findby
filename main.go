@@ -17,6 +17,10 @@ func main() {
 			Name:  "name, n",
 			Usage: "指定过滤的目录名或文件名",
 		},
+		cli.StringFlag{
+			Name:  "ext, e",
+			Usage: "指定过滤的文件扩展名",
+		},
 	}
 	app.Action = func(ctx *cli.Context) {
 		reg := ctx.String("regexp")
