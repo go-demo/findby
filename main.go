@@ -5,9 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 
-	"github.com/LyricTian/findby/find"
+	"git.oschina.net/lyric/findby/find"
 
 	"github.com/codegangsta/cli"
 )
@@ -37,8 +38,8 @@ func main() {
 		},
 		cli.IntFlag{
 			Name:  "count, c",
-			Value: 200,
-			Usage: "指定每次并发读取的文件数量，默认为200",
+			Value: 50,
+			Usage: "指定每次并发读取的文件数量",
 		},
 	}
 	app.Action = action
@@ -47,7 +48,7 @@ func main() {
 
 func tick(ch <-chan time.Time, startTime time.Time) {
 	for t := range ch {
-		fmt.Print(fmt.Sprintf("\r===> 正在进行文件查找,用时：%.1fs ", float64(t.Sub(startTime))/float64(time.Second)))
+		fmt.Print(fmt.Sprintf("\r===> 正在进行文件查找,用时：%.2f s,Goroutine:%d ", float64(t.Sub(startTime))/float64(time.Second), runtime.NumGoroutine()))
 	}
 }
 
@@ -69,16 +70,15 @@ func action(ctx *cli.Context) {
 	}
 	defer outFile.Close()
 
-	// var (
-	// 	startTime = time.Now()
-	// 	ticker    = time.NewTicker(time.Millisecond)
-	// )
+	var (
+		startTime = time.Now()
+		ticker    = time.NewTicker(time.Millisecond)
+	)
 
-	// go tick(ticker.C, startTime)
-
+	go tick(ticker.C, startTime)
 	f := find.NewFile(names, ctx.StringSlice("ext"), reg, ctx.Int("count"))
-	fileContent := f.Find()
-	for fc := range fileContent {
+	for fc := range f.Find() {
+		// fmt.Print("\r正在查找文件，用时：", float64(time.Now().Sub(startTime))/float64(time.Millisecond), ",Goroutine:", runtime.NumGoroutine())
 		writer := bufio.NewWriter(outFile)
 		writer.WriteString(fc.FileName)
 		writer.WriteByte('\n')
@@ -91,5 +91,5 @@ func action(ctx *cli.Context) {
 		writer.Flush()
 	}
 
-	// fmt.Print(fmt.Sprintf("\r===> 文件查找完成,用时：%.1f", float64(time.Now().Sub(startTime))/float64(time.Second)))
+	fmt.Print(fmt.Sprintf("\r===> 文件查找完成,总用时：%.1f s ", float64(time.Now().Sub(startTime))/float64(time.Second)))
 }

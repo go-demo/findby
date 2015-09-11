@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 
 	"fmt"
@@ -22,6 +23,7 @@ func NewFile(names, exts []string, reg string, count int) *File {
 		Exts:      exts,
 		Regexp:    r,
 		ChanCount: count,
+		mutex:     fMutex{mutex: new(sync.Mutex), chRead: make(chan bool, 1)},
 	}
 }
 
@@ -35,8 +37,8 @@ type File struct {
 	Regexp *regexp.Regexp
 	// 缓冲区的文件数量
 	ChanCount int
-	// 错误处理
-	chError chan error
+	// 记录文件查找数量
+	mutex fMutex
 }
 
 // FileContent 文件内容
@@ -55,21 +57,30 @@ type Line struct {
 	Content string
 }
 
+type fMutex struct {
+	mutex     *sync.Mutex
+	readCount int64
+	findCount int64
+	chRead    chan bool
+}
+
 // Find 查找文件内容，并返回查找结果
 func (f *File) Find() <-chan FileContent {
-	chFileContent := make(chan FileContent, f.ChanCount)
-	go f.checkError()
-	chFile := f.readFileList()
-	go f.findFileContent(chFile, chFileContent)
+	var (
+		chFileContent = make(chan FileContent, f.ChanCount)
+		chFilePath    = make(chan string, f.ChanCount)
+	)
+
+	go f.readFileList(chFilePath)
+
+	go f.findContent(chFilePath, chFileContent)
 
 	return chFileContent
 }
 
-func (f *File) checkError() {
-	if err := <-f.chError; err != nil {
-		fmt.Println("===> Execute error:", err)
-		os.Exit(-1)
-	}
+func (f *File) handleError(err interface{}) {
+	fmt.Println("===> Perform error:", err)
+	os.Exit(-1)
 }
 
 // checkFileExt 检查文件扩展名
@@ -79,7 +90,7 @@ func (f *File) checkFileExt(fileName string) bool {
 		return ext != ""
 	}
 	for i := 0; i < len(f.Exts); i++ {
-		if string(ext[1:]) == f.Exts[i] {
+		if string(ext[1:]) == strings.Trim(f.Exts[i], " ") {
 			return true
 		}
 	}
@@ -87,123 +98,126 @@ func (f *File) checkFileExt(fileName string) bool {
 }
 
 // readDir 递归读取目录
-func (f *File) readDir(dirName string, chFile chan<- string, count *int64) {
+func (f *File) readDir(dirName string, chFilePath chan<- string) {
+	defer func() {
+		if err := recover(); err != nil {
+			f.handleError(err)
+		}
+	}()
 	dir, err := os.Open(dirName)
 	if err != nil {
-		f.chError <- err
-		return
+		panic(err)
 	}
 	defer dir.Close()
 	fi, err := dir.Readdir(0)
 	if err != nil {
-		f.chError <- err
-		return
+		panic(err)
 	}
 	for _, item := range fi {
 		name := dirName + "/" + item.Name()
 		if item.IsDir() {
-			f.readDir(name, chFile, count)
+			f.readDir(name, chFilePath)
 			continue
 		}
 		if f.checkFileExt(name) {
-			*count = *count + 1
-			chFile <- name
+			f.mutex.readCount++
+			chFilePath <- name
 		}
 	}
 }
 
 // readFileList 读取文件列表
-func (f *File) readFileList() <-chan string {
-	chFile := make(chan string, f.ChanCount)
-	go func() {
-		var fCount int64
-		for i := 0; i < len(f.Names); i++ {
-			name := f.Names[i]
-			if !filepath.IsAbs(name) {
-				name, _ = filepath.Abs(name)
-			}
-			fileInfo, err := os.Stat(name)
-			if err != nil {
-				f.chError <- err
-				break
-			}
-			if !fileInfo.IsDir() && f.checkFileExt(name) {
-				chFile <- name
-				continue
-			}
-			f.readDir(name, chFile, &fCount)
+func (f *File) readFileList(chFilePath chan<- string) {
+	defer func() {
+		if err := recover(); err != nil {
+			f.handleError(err)
 		}
-		fmt.Println("++++++> 文件总数量：", fCount)
-		close(chFile)
+		f.mutex.chRead <- true
+		close(chFilePath)
 	}()
-	return chFile
+	for i := 0; i < len(f.Names); i++ {
+		var (
+			err  error
+			name = f.Names[i]
+		)
+		if !filepath.IsAbs(name) {
+			name, err = filepath.Abs(name)
+			if err != nil {
+				panic(err)
+			}
+		}
+		fileInfo, err := os.Stat(name)
+		if err != nil {
+			panic(err)
+		}
+		if !fileInfo.IsDir() && f.checkFileExt(name) {
+			f.mutex.readCount++
+			chFilePath <- name
+			continue
+		}
+		f.readDir(name, chFilePath)
+	}
 }
 
-// findFileContent 查找文件内容
-func (f *File) findFileContent(chFile <-chan string, chFileContent chan<- FileContent) {
-	var (
-		mutex    sync.Mutex
-		fileSeed int64
-		readSeed int64
-		chSeed   = make(chan bool, 1)
-	)
-
-	go func() {
-		if <-chSeed {
-			fmt.Println("######> Close file content")
-			close(chFileContent)
-		}
-	}()
-
-	for fItem := range chFile {
-		fileSeed++
-		go func(name string) {
-			file, err := os.Open(name)
-			if err != nil {
-				f.chError <- err
-				return
-			}
-			defer file.Close()
-			reader := bufio.NewReader(file)
-			var (
-				fc      FileContent
-				buffer  = new(bytes.Buffer)
-				lineNum = 1
-			)
-			fc.FileName = name
-			for {
-				line, isPrefix, err := reader.ReadLine()
-				if err != nil {
-					break
-				}
-				if isPrefix {
-					buffer.Write(line)
-					continue
-				}
-				var l []byte
-				if buffer.Len() > 0 {
-					buffer.Write(line)
-					l = buffer.Bytes()
-					buffer.Reset()
-				} else {
-					l = line
-				}
-				if f.Regexp.Match(l) {
-					fc.Lines = append(fc.Lines, Line{Number: lineNum, Content: string(l)})
-				}
-				lineNum++
-			}
-			if len(fc.Lines) > 0 {
-				chFileContent <- fc
-			}
-			mutex.Lock()
-			readSeed++
-			mutex.Unlock()
-			fmt.Println("######> 查找文件数量：", readSeed)
-			if readSeed == fileSeed {
-				chSeed <- true
-			}
-		}(fItem)
+func (f *File) findContent(chFilePath <-chan string, chFileContent chan<- FileContent) {
+	for filePath := range chFilePath {
+		go f.findItem(filePath, chFileContent)
 	}
-	fmt.Println("------> 读取文件数量：", fileSeed)
+}
+
+func (f *File) findItem(filePath string, chFileContent chan<- FileContent) {
+	defer func() {
+		if err := recover(); err != nil {
+			f.handleError(err)
+		}
+		f.mutex.mutex.Unlock()
+	}()
+	file, err := os.Open(filePath)
+	if err != nil {
+		panic(err)
+	}
+	defer file.Close()
+	var (
+		fc      = FileContent{FileName: filePath}
+		buffer  = new(bytes.Buffer)
+		lineNum = 1
+	)
+	reader := bufio.NewReader(file)
+
+	for {
+		line, isPrefix, err := reader.ReadLine()
+		if err != nil {
+			break
+		}
+		if isPrefix {
+			buffer.Write(line)
+			continue
+		}
+		var l []byte
+		if buffer.Len() > 0 {
+			buffer.Write(line)
+			l = buffer.Bytes()
+			buffer.Reset()
+		} else {
+			l = line
+		}
+		if f.Regexp.Match(l) {
+			fc.Lines = append(fc.Lines, Line{Number: lineNum, Content: string(l)})
+		}
+		lineNum++
+	}
+	if len(fc.Lines) > 0 {
+		chFileContent <- fc
+	}
+	f.mutex.mutex.Lock()
+	f.mutex.findCount++
+	select {
+	case <-f.mutex.chRead:
+		if f.mutex.readCount == f.mutex.findCount {
+			close(chFileContent)
+		} else {
+			f.mutex.chRead <- true
+		}
+	default:
+	}
 }
