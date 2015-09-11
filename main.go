@@ -1,6 +1,16 @@
 package main
 
-import "github.com/codegangsta/cli"
+import (
+	"bufio"
+	"fmt"
+	"os"
+	"path/filepath"
+	"time"
+
+	"github.com/LyricTian/findby/find"
+
+	"github.com/codegangsta/cli"
+)
 
 func main() {
 	app := cli.NewApp()
@@ -18,17 +28,68 @@ func main() {
 			Usage: "指定过滤的目录名或文件名",
 		},
 		cli.StringFlag{
+			Name:  "out, o",
+			Usage: "指定输出文件",
+		},
+		cli.StringSliceFlag{
 			Name:  "ext, e",
 			Usage: "指定过滤的文件扩展名",
 		},
+		cli.IntFlag{
+			Name:  "count, c",
+			Value: 200,
+			Usage: "指定每次并发读取的文件数量，默认为200",
+		},
 	}
-	app.Action = func(ctx *cli.Context) {
-		reg := ctx.String("regexp")
-		names := ctx.StringSlice("name")
-		if len(reg) == 0 || len(names) == 0 {
-			cli.ShowAppHelp(ctx)
-			return
-		}
-	}
+	app.Action = action
 	app.RunAndExitOnError()
+}
+
+func tick(ch <-chan time.Time, startTime time.Time) {
+	for t := range ch {
+		fmt.Print(fmt.Sprintf("\r===> 正在进行文件查找,用时：%.1fs ", float64(t.Sub(startTime))/float64(time.Second)))
+	}
+}
+
+func action(ctx *cli.Context) {
+	reg := ctx.String("regexp")
+	names := ctx.StringSlice("name")
+	out := ctx.String("out")
+	if len(reg) == 0 || len(names) == 0 || len(out) == 0 {
+		cli.ShowAppHelp(ctx)
+		return
+	}
+	outPath, err := filepath.Abs(out)
+	if err != nil {
+		panic(err)
+	}
+	outFile, err := os.OpenFile(outPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0666)
+	if err != nil {
+		panic(err)
+	}
+	defer outFile.Close()
+
+	// var (
+	// 	startTime = time.Now()
+	// 	ticker    = time.NewTicker(time.Millisecond)
+	// )
+
+	// go tick(ticker.C, startTime)
+
+	f := find.NewFile(names, ctx.StringSlice("ext"), reg, ctx.Int("count"))
+	fileContent := f.Find()
+	for fc := range fileContent {
+		writer := bufio.NewWriter(outFile)
+		writer.WriteString(fc.FileName)
+		writer.WriteByte('\n')
+		writer.WriteByte('\n')
+		for _, l := range fc.Lines {
+			writer.WriteString(fmt.Sprintf("%d  %s", l.Number, l.Content))
+			writer.WriteByte('\n')
+		}
+		writer.WriteByte('\n')
+		writer.Flush()
+	}
+
+	// fmt.Print(fmt.Sprintf("\r===> 文件查找完成,用时：%.1f", float64(time.Now().Sub(startTime))/float64(time.Second)))
 }
