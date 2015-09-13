@@ -8,7 +8,7 @@ import (
 	"runtime"
 	"time"
 
-	"git.oschina.net/lyric/findby/find"
+	"github.com/LyricTian/findby/find"
 
 	"github.com/codegangsta/cli"
 )
