@@ -78,7 +78,6 @@ func action(ctx *cli.Context) {
 	go tick(ticker.C, startTime)
 	f := find.NewFile(names, ctx.StringSlice("ext"), reg, ctx.Int("count"))
 	for fc := range f.Find() {
-		// fmt.Print("\r正在查找文件，用时：", float64(time.Now().Sub(startTime))/float64(time.Millisecond), ",Goroutine:", runtime.NumGoroutine())
 		writer := bufio.NewWriter(outFile)
 		writer.WriteString(fc.FileName)
 		writer.WriteByte('\n')
