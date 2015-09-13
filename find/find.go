@@ -23,7 +23,7 @@ func NewFile(names, exts []string, reg string, count int) *File {
 		Exts:      exts,
 		Regexp:    r,
 		ChanCount: count,
-		mutex:     fMutex{mutex: new(sync.Mutex), chRead: make(chan bool, 1)},
+		Mutex:     &FMutex{mutex: new(sync.Mutex), chRead: make(chan bool, 1)},
 	}
 }
 
@@ -37,8 +37,8 @@ type File struct {
 	Regexp *regexp.Regexp
 	// 缓冲区的文件数量
 	ChanCount int
-	// 记录文件查找数量
-	mutex fMutex
+	// 监控过滤文件
+	Mutex *FMutex
 }
 
 // FileContent 文件内容
@@ -55,13 +55,6 @@ type Line struct {
 	Number int
 	// 行内容
 	Content string
-}
-
-type fMutex struct {
-	mutex     *sync.Mutex
-	readCount int64
-	findCount int64
-	chRead    chan bool
 }
 
 // Find 查找文件内容，并返回查找结果
@@ -120,7 +113,7 @@ func (f *File) readDir(dirName string, chFilePath chan<- string) {
 			continue
 		}
 		if f.checkFileExt(name) {
-			f.mutex.readCount++
+			f.Mutex.readCount++
 			chFilePath <- name
 		}
 	}
@@ -132,7 +125,7 @@ func (f *File) readFileList(chFilePath chan<- string) {
 		if err := recover(); err != nil {
 			f.handleError(err)
 		}
-		f.mutex.chRead <- true
+		f.Mutex.chRead <- true
 		close(chFilePath)
 	}()
 	for i := 0; i < len(f.Names); i++ {
@@ -151,7 +144,7 @@ func (f *File) readFileList(chFilePath chan<- string) {
 			panic(err)
 		}
 		if !fileInfo.IsDir() && f.checkFileExt(name) {
-			f.mutex.readCount++
+			f.Mutex.readCount++
 			chFilePath <- name
 			continue
 		}
@@ -170,7 +163,7 @@ func (f *File) findItem(filePath string, chFileContent chan<- FileContent) {
 		if err := recover(); err != nil {
 			f.handleError(err)
 		}
-		f.mutex.mutex.Unlock()
+		f.Mutex.mutex.Unlock()
 	}()
 	file, err := os.Open(filePath)
 	if err != nil {
@@ -206,17 +199,18 @@ func (f *File) findItem(filePath string, chFileContent chan<- FileContent) {
 		}
 		lineNum++
 	}
+	f.Mutex.mutex.Lock()
 	if len(fc.Lines) > 0 {
+		f.Mutex.resultCount++
 		chFileContent <- fc
 	}
-	f.mutex.mutex.Lock()
-	f.mutex.findCount++
+	f.Mutex.findCount++
 	select {
-	case <-f.mutex.chRead:
-		if f.mutex.readCount == f.mutex.findCount {
+	case <-f.Mutex.chRead:
+		if f.Mutex.readCount == f.Mutex.findCount {
 			close(chFileContent)
 		} else {
-			f.mutex.chRead <- true
+			f.Mutex.chRead <- true
 		}
 	default:
 	}

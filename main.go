@@ -46,9 +46,25 @@ func main() {
 	app.RunAndExitOnError()
 }
 
-func tick(ch <-chan time.Time, startTime time.Time) {
+func tick(ch <-chan time.Time, startTime time.Time, isComplete <-chan bool, f *find.File) {
 	for t := range ch {
-		fmt.Print(fmt.Sprintf("\r===> 正在进行文件查找,用时：%.2f s,Goroutine:%d ", float64(t.Sub(startTime))/float64(time.Second), runtime.NumGoroutine()))
+		select {
+		case <-isComplete:
+			os.Exit(0)
+		default:
+			var (
+				info   string
+				values []interface{}
+			)
+			info += "\r ===> 正在进行文件查找,其中:"
+			info += "(查找数量:%d,结果数量:%d,goroutine:%d,memory:%.2fkb,耗时:%.2fs) "
+			values = append(values, f.Mutex.ReadCount(), f.Mutex.ResultCount())
+			var mem runtime.MemStats
+			runtime.ReadMemStats(&mem)
+			values = append(values, runtime.NumGoroutine(), float64(mem.Alloc)/float64(1024))
+			values = append(values, float64(t.Sub(startTime))/float64(time.Second))
+			fmt.Print(fmt.Sprintf(info, values...))
+		}
 	}
 }
 
@@ -71,12 +87,14 @@ func action(ctx *cli.Context) {
 	defer outFile.Close()
 
 	var (
-		startTime = time.Now()
-		ticker    = time.NewTicker(time.Millisecond)
+		startTime  = time.Now()
+		ticker     = time.NewTicker(time.Millisecond)
+		isComplete = make(chan bool, 1)
 	)
 
-	go tick(ticker.C, startTime)
 	f := find.NewFile(names, ctx.StringSlice("ext"), reg, ctx.Int("count"))
+	go tick(ticker.C, startTime, isComplete, f)
+
 	for fc := range f.Find() {
 		writer := bufio.NewWriter(outFile)
 		writer.WriteString(fc.FileName)
@@ -89,6 +107,5 @@ func action(ctx *cli.Context) {
 		writer.WriteByte('\n')
 		writer.Flush()
 	}
-
-	fmt.Print(fmt.Sprintf("\r===> 文件查找完成,总用时：%.1f s ", float64(time.Now().Sub(startTime))/float64(time.Second)))
+	isComplete <- true
 }
