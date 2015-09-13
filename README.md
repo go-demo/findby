@@ -13,7 +13,7 @@
 > 查找$GOPATH下的所有go文件中的"fmt"
 
 ``` shell
-$ findby -r "(?i:fmt)" -n $GOPATH -e "go" -o temp.txt
+	$ findby -r "(?i:fmt)" -n $GOPATH -e "go" -o temp.txt
 ```
 
 ## 参数说明
