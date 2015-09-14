@@ -56,8 +56,8 @@ func tick(ch <-chan time.Time, startTime time.Time, isComplete <-chan bool, f *f
 				info   string
 				values []interface{}
 			)
-			info += "\r ===> 正在进行文件查找,其中:"
-			info += "(查找数量:%d,结果数量:%d,goroutine:%d,memory:%.2fkb,耗时:%.2fs) "
+			info += "\r ===> Find result:"
+			info += "(total:%d,find:%d,gr:%d,mem:%.2fkb,time:%.2fs) "
 			values = append(values, f.Mutex.ReadCount(), f.Mutex.ResultCount())
 			var mem runtime.MemStats
 			runtime.ReadMemStats(&mem)
